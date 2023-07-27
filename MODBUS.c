@@ -52,24 +52,24 @@ uint8_t flg_modbus_error;
 
 /*FUNCTION PROTOTYPES*/
 /*for internal use only*/
-void HW_FW_version_check(void);
-void USART_DMA_Init(void);
-void Comm_Param_Update(void);
-void Send_Response_Via_DMA(uint8_t count);
-void Init_Default_Values(uint8_t values);
-void check_frame(void);
-void Autoassignment(struct response_s *response_s);
-uint8_t Auto_asignment_scanning_delay(void);
-void Set_DERE_pin(void);
-void Reset_DERE_pin(void);
-void Set_NBT_pin(void);
-void Reset_NBT_pin(void);
-void Process_Request();
-void process_broadcast_request(uint8_t *buffer);
-void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data);
-void Modbus_registers_check(void);
-void Send_Exeption(uint8_t exeption_code);
-uint16_t EEPROM_Read_dummy(uint16_t register_number);
+static void HW_FW_version_check(void);
+static void USART_DMA_Init(void);
+static void Comm_Param_Update(void);
+static void Send_Response_Via_DMA(uint8_t count);
+static void Init_Default_Values(uint8_t values);
+static void check_frame(void);
+static void Autoassignment(struct response_s *response_s);
+static uint8_t Auto_asignment_scanning_delay(void);
+static void Set_DERE_pin(void);
+static void Reset_DERE_pin(void);
+static void Set_NBT_pin(void);
+static void Reset_NBT_pin(void);
+static void Process_Request();
+static void process_broadcast_request(uint8_t *buffer);
+static void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data);
+static void Modbus_registers_check(void);
+static void Send_Exeption(uint8_t exeption_code);
+static uint16_t EEPROM_Read_dummy(uint16_t register_number);
 
 
 /*Modbus CRC predefined values*/
@@ -167,7 +167,7 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 	Reset_DERE_pin();
 }
 
-void check_frame(void)
+static void check_frame(void)
 {
 	uint16_t crc_int;
 
@@ -184,7 +184,7 @@ void check_frame(void)
 	}
 }
 
-void Read_Input_Registers(struct response_s *response_s)
+static void Read_Input_Registers(struct response_s *response_s)
 {
 	uint16_t start_address  = (buf_modbus[2]<<8)+ buf_modbus[3];
 	uint16_t register_count, crc16;
@@ -212,7 +212,7 @@ void Read_Input_Registers(struct response_s *response_s)
 	response_s->frame_size = 5 + buf_modbus[2];
 }
 
-void Read_Holding_Registers(struct response_s *response_s)
+static void Read_Holding_Registers(struct response_s *response_s)
 {
 	uint16_t start_address  = (buf_modbus[2]<<8)+ buf_modbus[3];
 	uint16_t register_count, crc16;
@@ -263,7 +263,7 @@ void Read_Holding_Registers(struct response_s *response_s)
 	}
 }
 
-void Write_Multiple_Registers(struct response_s *response_s)
+static void Write_Multiple_Registers(struct response_s *response_s)
 {
 	uint16_t start_address  = (buf_modbus[2]<<8)+ buf_modbus[3];
 	uint16_t register_count, crc16;
@@ -367,7 +367,7 @@ void Write_Multiple_Registers(struct response_s *response_s)
 	}
 }
 
-void Write_Single_Register(struct response_s *response_s)
+static void Write_Single_Register(struct response_s *response_s)
 {
 	uint16_t start_address  = (buf_modbus[2]<<8)+ buf_modbus[3];
 	uint16_t crc16;
@@ -453,7 +453,7 @@ void Write_Single_Register(struct response_s *response_s)
 }
 
 
-void Process_Request()
+static void Process_Request()
 {
 	struct response_s response_s = {0, 0, 0};
 
@@ -505,7 +505,7 @@ void Process_Request()
 	}
 }
 
-void Send_Response_Via_DMA(uint8_t count)
+static void Send_Response_Via_DMA(uint8_t count)
 {
 	Set_DERE_pin(); //Transmit mode
 	//	HAL_UART_Transmit_IT(modbus_huart, buffer, count);
@@ -517,7 +517,7 @@ void Send_Response_Via_DMA(uint8_t count)
 	//	HAL_Delay(1);
 }
 
-void Send_Exeption(uint8_t exeption_code)
+static void Send_Exeption(uint8_t exeption_code)
 {
 	uint16_t crc16;
 	buf_modbus[0] = uint_hold_reg[0];	// Device address
@@ -529,7 +529,7 @@ void Send_Exeption(uint8_t exeption_code)
 	Send_Response_Via_DMA(5);	// Send packet response
 }
 
-void Autoassignment(struct response_s *response_s)
+static void Autoassignment(struct response_s *response_s)
 {
 	static uint8_t flg_autoassignment_status, flg_autoassignment_mode;
 
@@ -678,7 +678,7 @@ void Autoassignment(struct response_s *response_s)
 	}
 }
 
-void Init_Default_Values(uint8_t values)
+static void Init_Default_Values(uint8_t values)
 {
 	uint16_t start_register = 0;
 	uint16_t end_register = 0;
@@ -708,7 +708,7 @@ void Init_Default_Values(uint8_t values)
 }
 
 
-void Comm_Param_Update(void)
+static void Comm_Param_Update(void)
 {
 	/*parity*/
 	switch (uint_hold_reg[2]) {
@@ -800,14 +800,14 @@ void MBL_Modbus_Init(UART_HandleTypeDef *huart)	//TODO init NBT?
 	}
 }
 
-void USART_DMA_Init(void)
+static void USART_DMA_Init(void)
 {
 	HAL_UART_ReceiverTimeout_Config(modbus_huart, 34);
 	HAL_UART_EnableReceiverTimeout(modbus_huart);
 	HAL_UART_Receive_DMA(modbus_huart, buf_modbus, 0x100);
 }
 
-void Modbus_registers_check(void)	//UPDATED
+static void Modbus_registers_check(void)	//UPDATED
 {
 	uint16_t reg_data;
 
@@ -835,7 +835,7 @@ void Modbus_registers_check(void)	//UPDATED
 	}
 }
 
-void HW_FW_version_check(void)
+static void HW_FW_version_check(void)
 {
 	if (EEPROM_Read_dummy(3) != RegVirtAddr[3].DefaultValue)  	//Check the Device type
 	{
@@ -855,7 +855,7 @@ void HW_FW_version_check(void)
 }
 
 
-void Comm_Reset_Jumper_Check(void)
+static void Comm_Reset_Jumper_Check(void)
 {
 	static uint8_t cnt_100ms, cnt_reset_communication_pressed, flg_reset_communication_completed;
 
@@ -911,7 +911,7 @@ void Modbus_Timeout_Check()
 	}
 }
  */
-void Modbus_Timeout_Check()
+static void Modbus_Timeout_Check(void)
 {
 	static uint16_t cnt_second;
 
@@ -978,12 +978,12 @@ uint8_t Auto_asignment_scanning_delay(void)
 	return 0;
 }
 
-uint16_t EEPROM_Read_dummy(uint16_t register_number)
+static uint16_t EEPROM_Read_dummy(uint16_t register_number)
 {
 	return EE_ReadVariable(RegVirtAddr[register_number].virtualAddress);
 }
 
-void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data)
+static void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data)
 {
 	uint16_t old_value = EEPROM_Read_dummy(register_number);
 
@@ -1001,24 +1001,24 @@ void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
 	EEPROM_Write_dummy(register_number, reg_data);
 }
 
-void Set_DERE_pin(void)
+static void Set_DERE_pin(void)
 {
 	USART1_DE_GPIO_Port->BSRR = USART1_DE_Pin;
 	MBL_Switch_DE_Action(1);
 }
 
-void Reset_DERE_pin(void)
+static void Reset_DERE_pin(void)
 {
 	USART1_DE_GPIO_Port->BRR = USART1_DE_Pin;
 	MBL_Switch_DE_Action(0);
 }
 
-void Set_NBT_pin(void)
+static void Set_NBT_pin(void)
 {
 	USART1_NBT_GPIO_Port->BSRR = USART1_NBT_Pin;
 }
 
-void Reset_NBT_pin(void)
+static void Reset_NBT_pin(void)
 {
 	USART1_NBT_GPIO_Port->BRR = USART1_NBT_Pin;
 }
