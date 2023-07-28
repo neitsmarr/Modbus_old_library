@@ -1,9 +1,8 @@
 /*Modbus.c*/
 #include "MODBUS.h"
 #include "EEPROM.h"
-#include <stdlib.h>
 
-#define UID_ADDRESS					0x1FFFF7AC
+#define UID_ADDRESS					0x1FFFF7AC	//TODO replace with UID_BASE
 #define PID_ADDRESS 				0x08001FF0
 
 #define MODBUS_BUFFER_SIZE			256
@@ -65,7 +64,6 @@ static void Reset_DERE_pin(void);
 static void Set_NBT_pin(void);
 static void Reset_NBT_pin(void);
 static void Process_Request();
-static void process_broadcast_request(uint8_t *buffer);
 static void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data);
 static void Modbus_registers_check(void);
 static void Send_Exeption(uint8_t exeption_code);
@@ -159,12 +157,14 @@ void MBL_Modbus(void)
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
 	//	huart->Instance->ICR = 0xFFFFFFFF;
-	if(flg_reinit_modbus)
+
+	Reset_DERE_pin();
+
+	if(flg_reinit_modbus)	//XXX test it
 	{
 		flg_reinit_modbus = 0;
 		Comm_Param_Update();
 	}
-	Reset_DERE_pin();
 }
 
 static void check_frame(void)
@@ -765,7 +765,7 @@ static void Comm_Param_Update(void)
 	HAL_UART_Init(modbus_huart);
 }
 
-void MBL_Modbus_Init(UART_HandleTypeDef *huart)	//TODO init NBT?
+void MBL_Modbus_Init(UART_HandleTypeDef *huart)
 {
 	modbus_huart = huart;
 
@@ -786,6 +786,12 @@ void MBL_Modbus_Init(UART_HandleTypeDef *huart)	//TODO init NBT?
 		{
 			uint_hold_reg[i] = EEPROM_Read_dummy(i);
 		}
+	}
+
+	//init NBT XXX test and optimize
+	if(uint_hold_reg[8])
+	{
+		Set_NBT_pin();
 	}
 
 	Comm_Param_Update();
@@ -880,48 +886,18 @@ static void Comm_Reset_Jumper_Check(void)
 		}
 	}
 }
-/*
-void Modbus_Timeout_Check()
-{
-	static uint16_t cnt_second, cnt_modbus_no_comm;
 
-	if(cnt_second < 1000)
-	{
-		cnt_second++;
-	}
-	else
-	{
-		cnt_second = 0;
-
-		if(flg_modbus_no_comm == 0)
-		{
-			if(cnt_modbus_no_comm < uint_hold_reg[7])
-			{
-				cnt_modbus_no_comm++;
-			}
-			else
-			{
-				if(uint_hold_reg[7] > 0) flg_modbus_no_comm = 1;
-			}
-		}
-		else
-		{
-			cnt_modbus_no_comm = 0;
-		}
-	}
-}
- */
 static void Modbus_Timeout_Check(void)
 {
-	static uint16_t cnt_second;
+	static uint16_t cnt_seconds;
 
-	if(cnt_second < 1000)
+	if(cnt_seconds < 1000)
 	{
-		cnt_second++;
+		cnt_seconds++;
 	}
 	else
 	{
-		cnt_second = 0;
+		cnt_seconds = 0;
 
 		if(uint_hold_reg[7] > 0)
 		{
@@ -942,35 +918,16 @@ static void Modbus_Timeout_Check(void)
 
 uint8_t Auto_asignment_scanning_delay(void)
 {
-	volatile uint16_t bbr = 0xffff;
+	uint16_t device_unique_value;
 
-	for(uint8_t i=0;i<0x10;i++)
-	{
-		bbr ^= buff_puf[i];
-		for(uint8_t j=0;j<16;j++)
-		{
-			if((bbr&0x8000) == 0x8000)
-			{
-				bbr <<= 1;
-				bbr ^= 0x1DB7;	//generating the seed from PUF ram buffer using CRC generation
-			}
-			else
-			{
-				bbr <<= 1;
-			}
-		}
-	}
-	srand(bbr);																	//seeding the seed
-	//	uint64_t responce_delay = (uint64_t)((uint64_t)rand() * 1000) / RAND_MAX;	//transform the rand() value from 0 to 1000 ms
-	cnt_autoassignment_delay = (uint16_t)((uint64_t)rand() * 1000UL / RAND_MAX);
-	//	if(responce_delay > 1000) responce_delay = 1000; 							//check to not go over 1000ms
-	//	cnt_responce_delay = responce_delay;										//load the cnt with the delay value
-	//if(cnt_responce_delay > 0)cnt_responce_delay--;							//in interrupt at 1ms
+	device_unique_value = CRC16((uint8_t*)UID_BASE, 12);
 
-	while(cnt_autoassignment_delay)///////////////scanning
+	cnt_autoassignment_delay =  device_unique_value & 0x3FF;	//XXX test it
+
+	while(cnt_autoassignment_delay)	//scanning
 	{
 		//check UART RX pin
-		if((GPIOA->IDR&GPIO_IDR_10) == 0)	//TODO make it dependent on modbus_huart
+		if((USART1_RX_GPIO_Port->IDR&USART1_RX_Pin) == 0)	//XXX test it
 		{
 			return 1;
 		}
@@ -1048,20 +1005,24 @@ void MBL_Modbus_Inc_Tick(void)
 {
 	Comm_Reset_Jumper_Check();
 	Modbus_Timeout_Check();
-	if(cnt_autoassignment_delay > 0) cnt_autoassignment_delay--;
+
+	if(cnt_autoassignment_delay > 0)
+	{
+		cnt_autoassignment_delay--;
+	}
 }
 
-__weak void MBL_Switch_DE_Action(uint8_t state)
+__weak void MBL_Switch_DE_Action(uint8_t /*state*/)
 {
 
 }
 
-__weak uint8_t MBL_Check_Dynamic_Restrictions(uint16_t register_address, uint16_t register_data)
+__weak uint8_t MBL_Check_Dynamic_Restrictions(uint16_t /*register_address*/, uint16_t /*register_data*/)
 {
 	return 0;
 }
 
-__weak void MBL_Register_Update_Callback(uint16_t register_address, uint16_t register_data)
+__weak void MBL_Register_Update_Callback(uint16_t /*register_address*/, uint16_t /*register_data*/)
 {
 
 }
