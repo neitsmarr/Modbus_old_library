@@ -47,31 +47,159 @@ uint8_t buf_modbus[MODBUS_BUFFER_SIZE];
 uint8_t flg_modbus_packet_received;
 uint8_t flg_reinit_modbus;
 volatile uint16_t cnt_autoassignment_delay;
-uint8_t flg_modbus_error;
 
 /*FUNCTION PROTOTYPES*/
 /*for internal use only*/
-static void HW_FW_version_check(void);
-static void USART_DMA_Init(void);
-static void Comm_Param_Update(void);
-static void Send_Response_Via_DMA(uint8_t count);
+static void Check_HW_FW_Version(void);
+static void Init_USART_DMA(void);
+static void Update_Communication_Parameters(void);
+static void Send_Response(uint8_t count);
 static void Init_Default_Values(uint8_t values);
-static void check_frame(void);
-static void Autoassignment(struct response_s *response_s);
-static uint8_t Auto_asignment_scanning_delay(void);
-static void Set_DERE_pin(void);
-static void Reset_DERE_pin(void);
-static void Set_NBT_pin(void);
-static void Reset_NBT_pin(void);
+static void Check_Frame(void);
+static void Process_Autoassignment_Request(struct response_s *response_s);
+static uint8_t Detain_Autoasignment_Response(void);
+static void Set_DE_Pin(void);
+static void Reset_DE_Pin(void);
+static void Set_NBT_Pin(void);
+static void Reset_NBT_Pin(void);
 static void Process_Request();
-static void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data);
-static void Modbus_registers_check(void);
+static void Write_EEPROM_Dummy(uint16_t register_number, uint16_t reg_data);
+static void Check_Modbus_Registers(void);
 static void Send_Exeption(uint8_t exeption_code);
-static uint16_t EEPROM_Read_dummy(uint16_t register_number);
+static uint16_t Read_EEPROM_Dummy(uint16_t register_number);
+static void Check_Communication_Reset_Jumper(void);
+static void Check_Modbus_Timeout(void);
+static uint16_t Calculate_CRC16(uint8_t *buf, uint16_t len);
 
 
-/*Modbus CRC predefined values*/
-static uint16_t CRC16(uint8_t *buf, uint16_t len)
+/*PUBLIC FUNCTIONS*/
+void MBL_Init_Modbus(UART_HandleTypeDef *huart)
+{
+	modbus_huart = huart;
+
+	EE_Init();
+	Init_USART_DMA();
+
+	if(Read_EEPROM_Dummy(0) == 0)	//check is this the first mcu startup
+	{
+		Init_Default_Values(ALL_VALUES);
+	}
+
+	Check_Modbus_Registers();
+	Check_HW_FW_Version();	//check if there is new FW version
+
+	for (uint16_t i=0; i<H_REG_COUNT; i++)
+	{
+		if (RegVirtAddr[i].RW != 2)	//if the register is used
+		{
+			uint_hold_reg[i] = Read_EEPROM_Dummy(i);
+		}
+	}
+
+	//init NBT XXX test and optimize
+	if(uint_hold_reg[8])
+	{
+		Set_NBT_Pin();
+	}
+
+	Update_Communication_Parameters();
+
+	for(uint16_t i=0; i<6; i++)
+	{
+		uint_spec_reg[i] = *(uint16_t*) (UID_ADDRESS + 2*i);	//Unique ID
+	}
+	for(uint16_t i=6; i<11; i++)
+	{
+		uint_spec_reg[i] = *(uint16_t*) (PID_ADDRESS + 2*(i-6));	//Production ID
+	}
+}
+
+void MBL_Check_For_Request(void)
+{
+	if(flg_modbus_packet_received)
+	{
+		flg_modbus_packet_received = 0;
+
+		if(modbus_huart->ErrorCode == HAL_UART_ERROR_RTO)
+		{
+			len_modbus_frame = MODBUS_BUFFER_SIZE - modbus_huart->hdmarx->Instance->CNDTR;
+			if(len_modbus_frame > 7)
+			{
+				Check_Frame();
+			}
+		}
+		else
+		{
+			modbus_huart->ErrorCode = HAL_UART_ERROR_NONE;
+		}
+
+		HAL_UART_Receive_DMA(modbus_huart, buf_modbus, MODBUS_BUFFER_SIZE);
+	}
+}
+
+void MBL_Inc_Tick(void)
+{
+	static uint16_t cnt_second;
+
+	if(cnt_second < 1000)
+	{
+		cnt_second++;
+	}
+	else
+	{
+		Check_Communication_Reset_Jumper();
+		Check_Modbus_Timeout();
+	}
+
+	if(cnt_autoassignment_delay > 0)
+	{
+		cnt_autoassignment_delay--;
+	}
+}
+
+void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
+{
+	Write_EEPROM_Dummy(register_number, reg_data);
+}
+
+
+/*PUBLIC FUNCTIONS*/
+__weak void MBL_Switch_DE_Callback(uint8_t /*state*/)
+{
+
+}
+
+__weak uint8_t MBL_Check_Restrictions_Callback(uint16_t /*register_address*/, uint16_t /*register_data*/)
+{
+	return 0;
+}
+
+__weak void MBL_Register_Update_Callback(uint16_t /*register_address*/, uint16_t /*register_data*/)
+{
+
+}
+
+
+/*HAL CALLBACKS*/
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	flg_modbus_packet_received = 1;
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+	Reset_DE_Pin();
+
+	if(flg_reinit_modbus)	//XXX test it
+	{
+		flg_reinit_modbus = 0;
+		Update_Communication_Parameters();
+	}
+}
+
+
+/*PRIVATE FUNCTIONS*/
+static uint16_t Calculate_CRC16(uint8_t *buf, uint16_t len)
 {
 	static const uint16_t crc_table[] = {
 			0X0000, 0XC0C1, 0XC181, 0X0140, 0XC301, 0X03C0, 0X0280, 0XC241,
@@ -120,47 +248,14 @@ static uint16_t CRC16(uint8_t *buf, uint16_t len)
 	return crc;
 }
 
-void MBL_Modbus(void)
-{
-	if(flg_modbus_packet_received)
-	{
-		flg_modbus_packet_received = 0;
 
-		if(modbus_huart->ErrorCode == HAL_UART_ERROR_RTO)
-		{
-			len_modbus_frame = MODBUS_BUFFER_SIZE - modbus_huart->hdmarx->Instance->CNDTR;
-			if(len_modbus_frame > 7)
-			{
-				check_frame();
-			}
-		}
-		else
-		{
-			modbus_huart->ErrorCode = HAL_UART_ERROR_NONE;
-		}
-
-		HAL_UART_Receive_DMA(modbus_huart, buf_modbus, MODBUS_BUFFER_SIZE);
-	}
-}
-
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-	Reset_DERE_pin();
-
-	if(flg_reinit_modbus)	//XXX test it
-	{
-		flg_reinit_modbus = 0;
-		Comm_Param_Update();
-	}
-}
-
-static void check_frame(void)
+static void Check_Frame(void)
 {
 	uint16_t crc_int;
 
 	crc_int = (buf_modbus[len_modbus_frame-1]<<8) + buf_modbus[len_modbus_frame-2];	//get CRC16 bytes from the received packet
 
-	if(crc_int == CRC16(buf_modbus,(len_modbus_frame-2)))	// Check does the CRC match
+	if(crc_int == Calculate_CRC16(buf_modbus,(len_modbus_frame-2)))	// Check does the CRC match
 	{
 		if ((buf_modbus[0] == uint_hold_reg[0]) || buf_modbus[0] == 0x00)	//Check if the device address is correct
 		{
@@ -191,7 +286,7 @@ static void Read_Input_Registers(struct response_s *response_s)
 			buf_modbus[4+(i-start_address)*2] = uint_input_reg[i];
 		}
 
-		crc16 = CRC16(buf_modbus,3+buf_modbus[2]);
+		crc16 = Calculate_CRC16(buf_modbus,3+buf_modbus[2]);
 		buf_modbus[3+buf_modbus[2]] = crc16;	// CRC Lo byte
 		buf_modbus[4+buf_modbus[2]] = crc16>>8;	// CRC Hi byte
 	}
@@ -238,7 +333,7 @@ static void Read_Holding_Registers(struct response_s *response_s)
 		}
 	}
 
-	crc16 = CRC16(buf_modbus,3+buf_modbus[2]);
+	crc16 = Calculate_CRC16(buf_modbus,3+buf_modbus[2]);
 	buf_modbus[3+buf_modbus[2]] = crc16;	// CRC Lo byte
 	buf_modbus[4+buf_modbus[2]] = crc16>>8;	// CRC Hi byte
 
@@ -281,7 +376,7 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 					{
 						if(((int16_t)RegVirtAddr[i].Minimum <= (int16_t)reg_data)&&((int16_t)reg_data <= (int16_t)RegVirtAddr[i].Maximum))
 						{
-							if(MBL_Check_Dynamic_Restrictions(i, reg_data))
+							if(MBL_Check_Restrictions_Callback(i, reg_data))
 							{
 								response_s->exception = 0x03;
 								break;
@@ -301,7 +396,7 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 					{
 						if((RegVirtAddr[i].Minimum <= reg_data)&&(reg_data <= RegVirtAddr[i].Maximum))
 						{
-							if(MBL_Check_Dynamic_Restrictions(i, reg_data))
+							if(MBL_Check_Restrictions_Callback(i, reg_data))
 							{
 								response_s->exception = 0x03;
 								break;
@@ -330,11 +425,11 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 	{
 		if(RegVirtAddr[i].RW == 0)
 		{
-			EEPROM_Write_dummy(i, uint_hold_reg_temporary[i]);
+			Write_EEPROM_Dummy(i, uint_hold_reg_temporary[i]);
 		}
 	}
 
-	crc16 = CRC16(buf_modbus,6);
+	crc16 = Calculate_CRC16(buf_modbus,6);
 	buf_modbus[6] = crc16;								// CRC Lo byte
 	buf_modbus[7] = crc16>>8;							// CRC Hi byte
 	response_s->frame_size = 8;
@@ -345,8 +440,8 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 	}
 	else if((start_address<=8) && (start_address+register_count>8))
 	{
-		if(uint_hold_reg[8]) Set_NBT_pin();
-		else Reset_NBT_pin();
+		if(uint_hold_reg[8]) Set_NBT_Pin();
+		else Reset_NBT_Pin();
 	}
 	else if((start_address<=9) && (start_address+register_count>9))
 	{
@@ -382,13 +477,13 @@ static void Write_Single_Register(struct response_s *response_s)
 			{
 				if(((int16_t)RegVirtAddr[start_address].Minimum <= (int16_t)reg_data)&&((int16_t)reg_data <= (int16_t)RegVirtAddr[start_address].Maximum))//is the data in the limits
 				{
-					if(MBL_Check_Dynamic_Restrictions(start_address, reg_data))
+					if(MBL_Check_Restrictions_Callback(start_address, reg_data))
 					{
 						response_s->exception = 0x03;
 					}
 					else
 					{
-						EEPROM_Write_dummy(start_address, reg_data);
+						Write_EEPROM_Dummy(start_address, reg_data);
 					}
 				}
 				else //exceptions when the data is outside of the limits
@@ -400,13 +495,13 @@ static void Write_Single_Register(struct response_s *response_s)
 			{
 				if((RegVirtAddr[start_address].Minimum <= reg_data)&&(reg_data <= RegVirtAddr[start_address].Maximum))//is the data in the limits
 				{
-					if(MBL_Check_Dynamic_Restrictions(start_address, reg_data))
+					if(MBL_Check_Restrictions_Callback(start_address, reg_data))
 					{
 						response_s->exception = 0x03;
 					}
 					else
 					{
-						EEPROM_Write_dummy(start_address, reg_data);
+						Write_EEPROM_Dummy(start_address, reg_data);
 					}
 				}
 				else //exceptions when the data is outside of the limits
@@ -419,7 +514,7 @@ static void Write_Single_Register(struct response_s *response_s)
 
 	buf_modbus[4] = reg_data>>8;	//Register value 1st byte
 	buf_modbus[5] = reg_data;	//Register value 2nd byte
-	crc16 = CRC16(buf_modbus,6);
+	crc16 = Calculate_CRC16(buf_modbus,6);
 	buf_modbus[6] = crc16;	//CRC Lo byte
 	buf_modbus[7] = crc16>>8;	//CRC Hi byte
 	response_s->frame_size = 8;
@@ -430,8 +525,8 @@ static void Write_Single_Register(struct response_s *response_s)
 	}
 	else if(start_address == 8)
 	{
-		if(uint_hold_reg[8]) Set_NBT_pin();
-		else Reset_NBT_pin();
+		if(uint_hold_reg[8]) Set_NBT_Pin();
+		else Reset_NBT_Pin();
 	}
 	else if(start_address == 9)
 	{
@@ -440,7 +535,7 @@ static void Write_Single_Register(struct response_s *response_s)
 }
 
 
-static void Process_Request()
+static void Process_Request(void)
 {
 	struct response_s response_s = {0, 0, 0};
 
@@ -472,7 +567,7 @@ static void Process_Request()
 	case 101:	//CONFIRMATION STEP
 	case 102:	//GET THE NEW ID
 	case 104:	//LEAVE AUTOASSIGNMENT MODE
-		Autoassignment(&response_s);
+		Process_Autoassignment_Request(&response_s);
 		break;
 
 	default:	//if the command is not supported
@@ -487,14 +582,14 @@ static void Process_Request()
 		}
 		else
 		{
-			Send_Response_Via_DMA(response_s.frame_size);	// Send packet response
+			Send_Response(response_s.frame_size);	// Send packet response
 		}
 	}
 }
 
-static void Send_Response_Via_DMA(uint8_t count)
+static void Send_Response(uint8_t count)
 {
-	Set_DERE_pin(); //Transmit mode
+	Set_DE_Pin(); //Transmit mode
 	//	HAL_UART_Transmit_IT(modbus_huart, buffer, count);
 	HAL_UART_Transmit_DMA(modbus_huart, buf_modbus, count);
 	//	HAL_Delay(1);
@@ -510,13 +605,13 @@ static void Send_Exeption(uint8_t exeption_code)
 	buf_modbus[0] = uint_hold_reg[0];	// Device address
 	buf_modbus[1] += MODBUS_ERROR_CODE;	// Modbus error code (0x80+command)
 	buf_modbus[2] = exeption_code;	// exception code
-	crc16 = CRC16(buf_modbus,3);
+	crc16 = Calculate_CRC16(buf_modbus,3);
 	buf_modbus[3] = crc16;	// CRC Lo byte
 	buf_modbus[4] = crc16>>8;	// CRC Hi byte
-	Send_Response_Via_DMA(5);	// Send packet response
+	Send_Response(5);	// Send packet response
 }
 
-static void Autoassignment(struct response_s *response_s)
+static void Process_Autoassignment_Request(struct response_s *response_s)
 {
 	static uint8_t flg_autoassignment_status, flg_autoassignment_mode;
 
@@ -544,15 +639,15 @@ static void Autoassignment(struct response_s *response_s)
 					buf_modbus[2+2*i] = uint_spec_reg[i]>>8;
 					buf_modbus[2+2*i+1] = uint_spec_reg[i];
 				}
-				a = EEPROM_Read_dummy(3);
+				a = Read_EEPROM_Dummy(3);
 				buf_modbus[24] = a>>8;									// Device type Low byte
 				buf_modbus[25] = a;										// Device type High byte
-				crc16 = CRC16(buf_modbus,26);
+				crc16 = Calculate_CRC16(buf_modbus,26);
 				buf_modbus[26] = crc16;									// CRC Low byte
 				buf_modbus[27] = crc16>>8;								// CRC High byte
 
 				//////////////////////// Random Delay generation and scanning ////////////////////////
-				if(Auto_asignment_scanning_delay() == 0)//w8 random delay and reply only if this is the first slave replying
+				if(Detain_Autoasignment_Response() == 0)//w8 random delay and reply only if this is the first slave replying
 				{
 					//					send_response_via_DMA(buf_modbus, 28);								// Send response packet
 					flg_autoassignment_status = 101;
@@ -582,7 +677,7 @@ static void Autoassignment(struct response_s *response_s)
 			r = buf_modbus[29];
 			r <<= 8;
 			r += buf_modbus[30];
-			if(r != EEPROM_Read_dummy(3))
+			if(r != Read_EEPROM_Dummy(3))
 			{
 				flg_autoassignment_status = 100;
 			}
@@ -597,10 +692,10 @@ static void Autoassignment(struct response_s *response_s)
 					buf_modbus[2+2*i] = uint_spec_reg[i]>>8;
 					buf_modbus[2+2*i+1] = uint_spec_reg[i];
 				}
-				a = EEPROM_Read_dummy(3);
+				a = Read_EEPROM_Dummy(3);
 				buf_modbus[24] = a>>8;									// Device type Low byte
 				buf_modbus[25] = a;										// Device type High byte
-				crc16 = CRC16(buf_modbus,26);
+				crc16 = Calculate_CRC16(buf_modbus,26);
 				buf_modbus[26] = crc16;									// CRC Low byte
 				buf_modbus[27] = crc16>>8;								// CRC High byte
 				//				send_response_via_DMA(buf_modbus, 28);								// Send response packet
@@ -638,13 +733,13 @@ static void Autoassignment(struct response_s *response_s)
 			//////////////If everything is the same get the new Slave ID and reply
 			if(flg_another_controller_addressed == 0)
 			{
-				EEPROM_Write_dummy(0, buf_modbus[8]);
+				Write_EEPROM_Dummy(0, buf_modbus[8]);
 
 				buf_modbus[0] = uint_hold_reg[0];						// Device address
 				buf_modbus[1] = 102;									// Command
 				buf_modbus[2] = 0x55;									// Dummy data
 				buf_modbus[3] = 0x55;									// Dummy data
-				crc16 = CRC16(buf_modbus,4);
+				crc16 = Calculate_CRC16(buf_modbus,4);
 				buf_modbus[4] = crc16;									// CRC Low byte
 				buf_modbus[5] = crc16>>8;								// CRC High byte
 				//				send_response_via_DMA(buf_modbus, 6);					// Send response packet
@@ -688,14 +783,14 @@ static void Init_Default_Values(uint8_t values)
 
 	for(uint32_t i=start_register;i<end_register;i++)//For the first three registers (The communication registers according to the Sentera standard)
 	{
-		EEPROM_Write_dummy(i, RegVirtAddr[i].DefaultValue);//write the default values
+		Write_EEPROM_Dummy(i, RegVirtAddr[i].DefaultValue);//write the default values
 	}
 
-	if(values) Comm_Param_Update();
+	if(values) Update_Communication_Parameters();
 }
 
 
-static void Comm_Param_Update(void)
+static void Update_Communication_Parameters(void)
 {
 	/*parity*/
 	switch (uint_hold_reg[2]) {
@@ -752,55 +847,15 @@ static void Comm_Param_Update(void)
 	HAL_UART_Init(modbus_huart);
 }
 
-void MBL_Modbus_Init(UART_HandleTypeDef *huart)
-{
-	modbus_huart = huart;
 
-	EE_Init();
-	USART_DMA_Init();
-
-	if(EEPROM_Read_dummy(0) == 0)	//check is this the first mcu startup
-	{
-		Init_Default_Values(ALL_VALUES);
-	}
-
-	Modbus_registers_check();
-	HW_FW_version_check();	//check if there is new FW version
-
-	for (uint16_t i=0; i<H_REG_COUNT; i++)
-	{
-		if (RegVirtAddr[i].RW != 2)	//if the register is used
-		{
-			uint_hold_reg[i] = EEPROM_Read_dummy(i);
-		}
-	}
-
-	//init NBT XXX test and optimize
-	if(uint_hold_reg[8])
-	{
-		Set_NBT_pin();
-	}
-
-	Comm_Param_Update();
-
-	for(uint16_t i=0; i<6; i++)
-	{
-		uint_spec_reg[i] = *(uint16_t*) (UID_ADDRESS + 2*i);	//Unique ID
-	}
-	for(uint16_t i=6; i<11; i++)
-	{
-		uint_spec_reg[i] = *(uint16_t*) (PID_ADDRESS + 2*(i-6));	//Production ID
-	}
-}
-
-static void USART_DMA_Init(void)
+static void Init_USART_DMA(void)
 {
 	HAL_UART_ReceiverTimeout_Config(modbus_huart, 34);
 	HAL_UART_EnableReceiverTimeout(modbus_huart);
 	HAL_UART_Receive_DMA(modbus_huart, buf_modbus, 0x100);
 }
 
-static void Modbus_registers_check(void)	//UPDATED
+static void Check_Modbus_Registers(void)	//UPDATED
 {
 	uint16_t reg_data;
 
@@ -808,106 +863,90 @@ static void Modbus_registers_check(void)	//UPDATED
 	{
 		if(RegVirtAddr[i].RW == 0)
 		{
-			reg_data = EEPROM_Read_dummy(i);
+			reg_data = Read_EEPROM_Dummy(i);
 
 			if(RegVirtAddr[i].signedUnsigned)	//signed
 			{
 				if(((int16_t)reg_data < (int16_t)RegVirtAddr[i].Minimum) || ((int16_t)RegVirtAddr[i].Maximum < (int16_t)reg_data))
 				{
-					EEPROM_Write_dummy(i, RegVirtAddr[i].DefaultValue);		//Not OK = write default value
+					Write_EEPROM_Dummy(i, RegVirtAddr[i].DefaultValue);		//Not OK = write default value
 				}
 			}
 			else	//unigned
 			{
 				if((reg_data < RegVirtAddr[i].Minimum) || (RegVirtAddr[i].Maximum < reg_data))
 				{
-					EEPROM_Write_dummy(i, RegVirtAddr[i].DefaultValue);//Not OK = write default value
+					Write_EEPROM_Dummy(i, RegVirtAddr[i].DefaultValue);//Not OK = write default value
 				}
 			}
 		}
 	}
 }
 
-static void HW_FW_version_check(void)
+static void Check_HW_FW_Version(void)
 {
-	if (EEPROM_Read_dummy(3) != RegVirtAddr[3].DefaultValue)  	//Check the Device type
+	if (Read_EEPROM_Dummy(3) != RegVirtAddr[3].DefaultValue)  	//Check the Device type
 	{
-		EEPROM_Write_dummy (3, RegVirtAddr[3].DefaultValue);  	//New device type
+		Write_EEPROM_Dummy (3, RegVirtAddr[3].DefaultValue);  	//New device type
 		Init_Default_Values(SET_VALUES); // setting to default values if the device type is new
 #if UPDATE_HW_VERSION
-		if (EEPROM_Read_dummy(4) != RegVirtAddr[4].DefaultValue)
+		if (Read_EEPROM_Dummy(4) != RegVirtAddr[4].DefaultValue)
 		{
-			EEPROM_Write_dummy (4, RegVirtAddr[4].DefaultValue);	//New hardware version
+			Write_EEPROM_Dummy (4, RegVirtAddr[4].DefaultValue);	//New hardware version
 		}
 #endif
 	}
-	if (EEPROM_Read_dummy (5) != RegVirtAddr[5].DefaultValue)
+	if (Read_EEPROM_Dummy (5) != RegVirtAddr[5].DefaultValue)
 	{
-		EEPROM_Write_dummy (5, RegVirtAddr[5].DefaultValue);  	//New firmware version	//TODO how to add new HRs automatically?
+		Write_EEPROM_Dummy (5, RegVirtAddr[5].DefaultValue);  	//New firmware version	//TODO how to add new HRs automatically?
 	}
 }
 
 
-static void Comm_Reset_Jumper_Check(void)
+static void Check_Communication_Reset_Jumper(void)
 {
-	static uint8_t cnt_100ms, cnt_reset_communication_pressed, flg_reset_communication_completed;
+	static uint8_t cnt_reset_communication_pressed, flg_reset_communication_completed;
 
-	if(cnt_100ms < 100) cnt_100ms++;
+	if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_14))
+	{
+		if(!flg_reset_communication_completed && (cnt_reset_communication_pressed == 50))
+		{
+			Init_Default_Values(COMM_VALUES);
+			flg_reset_communication_completed = 1;
+		}
+
+		cnt_reset_communication_pressed++;
+	}
 	else
 	{
-		cnt_100ms = 0;
+		flg_reset_communication_completed = 0;
+		cnt_reset_communication_pressed = 0;
+	}
+}
 
-		if(HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_14))
+static void Check_Modbus_Timeout(void)
+{
+	if(uint_hold_reg[7] > 0)
+	{
+		if(flg_modbus_no_comm == 0)
 		{
-			if(!flg_reset_communication_completed && (cnt_reset_communication_pressed == 50))
+			if(cnt_modbus_no_comm < (uint_hold_reg[7] * 60))
 			{
-				Init_Default_Values(COMM_VALUES);
-				flg_reset_communication_completed = 1;
+				cnt_modbus_no_comm++;
 			}
-			cnt_reset_communication_pressed++;
-		}
-		else
-		{
-			flg_reset_communication_completed = 0;
-			cnt_reset_communication_pressed = 0;
-		}
-	}
-}
-
-static void Modbus_Timeout_Check(void)
-{
-	static uint16_t cnt_seconds;
-
-	if(cnt_seconds < 1000)
-	{
-		cnt_seconds++;
-	}
-	else
-	{
-		cnt_seconds = 0;
-
-		if(uint_hold_reg[7] > 0)
-		{
-			if(flg_modbus_no_comm == 0)
+			else
 			{
-				if(cnt_modbus_no_comm < (uint_hold_reg[7] * 60))
-				{
-					cnt_modbus_no_comm++;
-				}
-				else
-				{
-					flg_modbus_no_comm = 1;
-				}
+				flg_modbus_no_comm = 1;
 			}
 		}
 	}
 }
 
-uint8_t Auto_asignment_scanning_delay(void)
+static uint8_t Detain_Autoasignment_Response(void)
 {
 	uint16_t device_unique_value;
 
-	device_unique_value = CRC16((uint8_t*)UID_BASE, 12);
+	device_unique_value = Calculate_CRC16((uint8_t*)UID_BASE, 12);
 
 	cnt_autoassignment_delay =  device_unique_value & 0x3FF;	//XXX test it
 
@@ -922,14 +961,14 @@ uint8_t Auto_asignment_scanning_delay(void)
 	return 0;
 }
 
-static uint16_t EEPROM_Read_dummy(uint16_t register_number)
+static uint16_t Read_EEPROM_Dummy(uint16_t register_number)
 {
 	return EE_ReadVariable(RegVirtAddr[register_number].virtualAddress);
 }
 
-static void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data)
+static void Write_EEPROM_Dummy(uint16_t register_number, uint16_t reg_data)
 {
-	uint16_t old_value = EEPROM_Read_dummy(register_number);
+	uint16_t old_value = Read_EEPROM_Dummy(register_number);
 
 	if(reg_data != old_value)	//TODO optimise this workaround
 	{
@@ -940,60 +979,28 @@ static void EEPROM_Write_dummy(uint16_t register_number, uint16_t reg_data)
 	MBL_Register_Update_Callback(register_number, reg_data);
 }
 
-void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
-{
-	EEPROM_Write_dummy(register_number, reg_data);
-}
 
-static void Set_DERE_pin(void)
+static void Set_DE_Pin(void)
 {
 	USART1_DE_GPIO_Port->BSRR = USART1_DE_Pin;
-	MBL_Switch_DE_Action(1);
+	MBL_Switch_DE_Callback(1);
 }
 
-static void Reset_DERE_pin(void)
+static void Reset_DE_Pin(void)
 {
 	USART1_DE_GPIO_Port->BRR = USART1_DE_Pin;
-	MBL_Switch_DE_Action(0);
+	MBL_Switch_DE_Callback(0);
 }
 
-static void Set_NBT_pin(void)
+static void Set_NBT_Pin(void)
 {
 	USART1_NBT_GPIO_Port->BSRR = USART1_NBT_Pin;
 }
 
-static void Reset_NBT_pin(void)
+static void Reset_NBT_Pin(void)
 {
 	USART1_NBT_GPIO_Port->BRR = USART1_NBT_Pin;
 }
 
-void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
-{
-	flg_modbus_packet_received = 1;
-}
 
-void MBL_Modbus_Inc_Tick(void)
-{
-	Comm_Reset_Jumper_Check();
-	Modbus_Timeout_Check();
 
-	if(cnt_autoassignment_delay > 0)
-	{
-		cnt_autoassignment_delay--;
-	}
-}
-
-__weak void MBL_Switch_DE_Action(uint8_t /*state*/)
-{
-
-}
-
-__weak uint8_t MBL_Check_Dynamic_Restrictions(uint16_t /*register_address*/, uint16_t /*register_data*/)
-{
-	return 0;
-}
-
-__weak void MBL_Register_Update_Callback(uint16_t /*register_address*/, uint16_t /*register_data*/)
-{
-
-}
