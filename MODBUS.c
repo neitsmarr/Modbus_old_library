@@ -5,7 +5,7 @@
 #define UID_ADDRESS					0x1FFFF7AC	//TODO replace with UID_BASE
 #define PID_ADDRESS 				0x08001FF0
 
-#define MODBUS_BUFFER_SIZE			256
+#define MODBUS_BUFFER_SIZE			0x100
 
 /*Modbus function codes*/
 #define READ_HOLDING_REGISTERS 		0x03
@@ -123,11 +123,10 @@ static uint16_t CRC16(uint8_t *buf, uint16_t len)
 void MBL_Modbus(void)
 {
 	if(flg_modbus_packet_received)
-//	if(modbus_huart->Instance->ISR & USART_ISR_RTOF)
 	{
 		flg_modbus_packet_received = 0;
-//		modbus_huart->Instance->ICR = USART_ICR_RTOCF;
-		if(!flg_modbus_error)
+
+		if(modbus_huart->ErrorCode == HAL_UART_ERROR_RTO)
 		{
 			len_modbus_frame = MODBUS_BUFFER_SIZE - modbus_huart->hdmarx->Instance->CNDTR;
 			if(len_modbus_frame > 7)
@@ -137,27 +136,15 @@ void MBL_Modbus(void)
 		}
 		else
 		{
-			flg_modbus_error = 0;
+			modbus_huart->ErrorCode = HAL_UART_ERROR_NONE;
 		}
-		HAL_UART_AbortReceive_IT(modbus_huart);
-		HAL_UART_Receive_DMA(modbus_huart, buf_modbus, 0x100);
-//		modbus_huart->hdmarx->Instance->CCR &= ~DMA_CCR_EN;
-//		modbus_huart->hdmarx->Instance->CNDTR = MODBUS_BUFFER_SIZE;
-//		modbus_huart->hdmarx->Instance->CCR |= DMA_CCR_EN;
-	}
 
-//	if(modbus_huart->Instance->ISR & USART_ISR_TC)
-//	{
-//		modbus_huart->Instance->ICR = USART_ICR_TCCF;
-//
-//		Reset_DERE_pin();
-//	}
+		HAL_UART_Receive_DMA(modbus_huart, buf_modbus, MODBUS_BUFFER_SIZE);
+	}
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-	//	huart->Instance->ICR = 0xFFFFFFFF;
-
 	Reset_DERE_pin();
 
 	if(flg_reinit_modbus)	//XXX test it
@@ -980,25 +967,9 @@ static void Reset_NBT_pin(void)
 	USART1_NBT_GPIO_Port->BRR = USART1_NBT_Pin;
 }
 
-void MBL_Modbus_IRQHandler(void)
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-	if(modbus_huart->Instance->ISR & (USART_ISR_PE | USART_ISR_FE | USART_ISR_NE))
-	{
-		modbus_huart->Instance->ICR |= USART_ICR_PECF | USART_ICR_FECF | USART_ICR_NCF;
-		flg_modbus_error = 1;
-	}
-	if(modbus_huart->Instance->ISR & USART_ISR_RTOF)
-	{
-		modbus_huart->Instance->ICR |= USART_ICR_RTOCF;
-		flg_modbus_packet_received = 1;
-	}
-	if ((modbus_huart->Instance->ISR & USART_ISR_TC) && (modbus_huart->Instance->CR1 & USART_CR1_TCIE))
-	{
-		ATOMIC_CLEAR_BIT(modbus_huart->Instance->CR1, USART_CR1_TCIE);
-		modbus_huart->gState = HAL_UART_STATE_READY;
-		modbus_huart->TxISR = NULL;
-		HAL_UART_TxCpltCallback(modbus_huart);
-	}
+	flg_modbus_packet_received = 1;
 }
 
 void MBL_Modbus_Inc_Tick(void)
