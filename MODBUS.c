@@ -2,29 +2,33 @@
 #include "MODBUS.h"
 #include "EEPROM.h"
 
-#define UID_ADDRESS					0x1FFFF7AC	//TODO replace with UID_BASE
 #define PID_ADDRESS 				0x08001FF0
 
 #define MODBUS_BUFFER_SIZE			0x100
 
 /*Modbus function codes*/
-#define READ_HOLDING_REGISTERS 		0x03
-#define READ_INPUT_REGISTERS 		0x04
-#define WRITE_SINGLE_REGISTER 		0x06
-#define WRITE_MULTIPLE_REGISTERS 	0x10
-#define MODBUS_ERROR_CODE			0x80
+enum function_code_e
+{
+	read_holding_registers = 0x03,
+	read_input_registers = 0x04,
+	write_single_register = 0x06,
+	write_multiple_registers = 0x10,
+	error = 0x80
+};
 
 /*init_default_values() parameters*/
-#define SET_VALUES 0
-#define COMM_VALUES 1
-#define ALL_VALUES 2
+enum
+{
+	seting_values = 0,
+	communication_values = 1,
+	all_values = 2
+};
 
 struct response_s {
 	uint8_t exception;;
 	uint8_t frame_size;
 	uint8_t flg_response;
 };
-
 
 extern const struct structHRVA RegVirtAddr[H_REG_COUNT];
 
@@ -71,8 +75,26 @@ static void Check_Communication_Reset_Jumper(void);
 static void Check_Modbus_Timeout(void);
 static uint16_t Calculate_CRC16(uint8_t *buf, uint16_t len);
 
+//example of description:
+/**
+ * @brief  Start Receive operation in DMA mode.
+ * @note   This function could be called by all HAL UART API providing reception in DMA mode.
+ * @note   When calling this function, parameters validity is considered as already checked,
+ *         i.e. Rx State, buffer address, ...
+ *         UART Handle is assumed as Locked.
+ * @param  huart UART handle.
+ * @param  pData Pointer to data buffer (u8 or u16 data elements).
+ * @param  Size  Amount of data elements (u8 or u16) to be received.
+ * @retval HAL status
+ */
+
 
 /*PUBLIC FUNCTIONS*/
+/**
+ * @brief Initialize the Modbus according to the specified parameters in the UART_InitTypeDef.
+ * @param huart UART handle.
+ * @retval void (HAL status)
+ */
 void MBL_Init_Modbus(UART_HandleTypeDef *huart)
 {
 	modbus_huart = huart;
@@ -82,7 +104,7 @@ void MBL_Init_Modbus(UART_HandleTypeDef *huart)
 
 	if(Read_EEPROM_Dummy(0) == 0)	//check is this the first mcu startup
 	{
-		Init_Default_Values(ALL_VALUES);
+		Init_Default_Values(all_values);
 	}
 
 	Check_Modbus_Registers();
@@ -114,6 +136,11 @@ void MBL_Init_Modbus(UART_HandleTypeDef *huart)
 	}
 }
 
+/**
+ * @brief Check for the new received Modbus request.
+ * @param none
+ * @retval none
+ */
 void MBL_Check_For_Request(void)
 {
 	if(flg_modbus_packet_received)
@@ -130,13 +157,18 @@ void MBL_Check_For_Request(void)
 		}
 		else
 		{
-			modbus_huart->ErrorCode = HAL_UART_ERROR_NONE;
+			modbus_huart->ErrorCode = HAL_UART_ERROR_NONE;	//called in HAL_UART_Receive_DMA() / HAL_UART_Receive_DMA() function
 		}
 
 		HAL_UART_Receive_DMA(modbus_huart, buf_modbus, MODBUS_BUFFER_SIZE);
 	}
 }
 
+/**
+ * @brief Modbus clock. Should be called every 1ms.
+ * @param none
+ * @retval none
+ */
 void MBL_Inc_Tick(void)
 {
 	static uint16_t cnt_second;
@@ -157,23 +189,43 @@ void MBL_Inc_Tick(void)
 	}
 }
 
+/**
+ * @brief Update holding register value in EEPROM and in the buffer.
+ * @param none
+ * @retval none
+ */
 void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
 {
 	Write_EEPROM_Dummy(register_number, reg_data);
 }
 
 
-/*PUBLIC FUNCTIONS*/
+/*CALLBACKS*/
+/**
+ * @brief This function is called every time when DE pin state changes.
+ * @param none
+ * @retval none
+ */
 __weak void MBL_Switch_DE_Callback(uint8_t /*state*/)
 {
 
 }
 
+/**
+ * @brief This function is called every time when Modbus master tries to update holding register value.
+ * @param none
+ * @retval 0 = ok (new value is allowed), 1 = not ok (new value is not allowed)
+ */
 __weak uint8_t MBL_Check_Restrictions_Callback(uint16_t /*register_address*/, uint16_t /*register_data*/)
 {
 	return 0;
 }
 
+/**
+ * @brief This function is called when holding register value has been updated.
+ * @param none
+ * @retval none
+ */
 __weak void MBL_Register_Update_Callback(uint16_t /*register_address*/, uint16_t /*register_data*/)
 {
 
@@ -416,7 +468,7 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 			}
 			if(response_s->exception)
 			{
-//				break;	//from case:
+				//				break;	//from case:
 			}
 		}
 	}
@@ -445,7 +497,7 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 	}
 	else if((start_address<=9) && (start_address+register_count>9))
 	{
-		Init_Default_Values(SET_VALUES);
+		Init_Default_Values(seting_values);
 	}
 }
 
@@ -530,7 +582,7 @@ static void Write_Single_Register(struct response_s *response_s)
 	}
 	else if(start_address == 9)
 	{
-		Init_Default_Values(SET_VALUES);
+		Init_Default_Values(seting_values);
 	}
 }
 
@@ -546,19 +598,19 @@ static void Process_Request(void)
 
 	switch(buf_modbus[1])
 	{
-	case READ_INPUT_REGISTERS:
+	case read_input_registers:
 		Read_Input_Registers(&response_s);
 		break;
 
-	case READ_HOLDING_REGISTERS:
+	case read_holding_registers:
 		Read_Holding_Registers(&response_s);
 		break;
 
-	case WRITE_SINGLE_REGISTER:
+	case write_single_register:
 		Write_Single_Register(&response_s);
 		break;
 
-	case WRITE_MULTIPLE_REGISTERS:
+	case write_multiple_registers:
 		Write_Multiple_Registers(&response_s);
 		break;
 
@@ -603,7 +655,7 @@ static void Send_Exeption(uint8_t exeption_code)
 {
 	uint16_t crc16;
 	buf_modbus[0] = uint_hold_reg[0];	// Device address
-	buf_modbus[1] += MODBUS_ERROR_CODE;	// Modbus error code (0x80+command)
+	buf_modbus[1] += error;	// Modbus error code (0x80+command)
 	buf_modbus[2] = exeption_code;	// exception code
 	crc16 = Calculate_CRC16(buf_modbus,3);
 	buf_modbus[3] = crc16;	// CRC Lo byte
@@ -767,15 +819,15 @@ static void Init_Default_Values(uint8_t values)
 
 	switch(values)
 	{
-	case ALL_VALUES:
+	case all_values:
 		start_register = 0;
 		end_register = H_REG_COUNT/* - H_REG_HIDDEN*/;	//TODO H_REG_USED or nonhidden register count
 		break;
-	case COMM_VALUES:
+	case communication_values:
 		start_register = 0;
 		end_register = 3;
 		break;
-	case SET_VALUES:
+	case seting_values:
 		start_register = 9;
 		end_register = H_REG_COUNT - H_REG_HIDDEN;	//TODO H_REG_USED
 		break;
@@ -888,7 +940,7 @@ static void Check_HW_FW_Version(void)
 	if (Read_EEPROM_Dummy(3) != RegVirtAddr[3].DefaultValue)  	//Check the Device type
 	{
 		Write_EEPROM_Dummy (3, RegVirtAddr[3].DefaultValue);  	//New device type
-		Init_Default_Values(SET_VALUES); // setting to default values if the device type is new
+		Init_Default_Values(seting_values); // setting to default values if the device type is new
 #if UPDATE_HW_VERSION
 		if (Read_EEPROM_Dummy(4) != RegVirtAddr[4].DefaultValue)
 		{
@@ -911,7 +963,7 @@ static void Check_Communication_Reset_Jumper(void)
 	{
 		if(!flg_reset_communication_completed && (cnt_reset_communication_pressed == 50))
 		{
-			Init_Default_Values(COMM_VALUES);
+			Init_Default_Values(communication_values);
 			flg_reset_communication_completed = 1;
 		}
 

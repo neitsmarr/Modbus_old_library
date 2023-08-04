@@ -16,7 +16,6 @@
 void MBL_Init_Modbus(UART_HandleTypeDef *huart);	//call this function in main.c after initialisation of all hardware
 void MBL_Check_For_Request(void);
 void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data);	//call this function to overwrite HR value in uint_hold_reg[] and EEPROM
-void MBL_Modbus_IRQHandler(void);	//call this function instead of default HAL_UART_IRQHandler
 void MBL_Inc_Tick(void);	//call this function inside SysTick_Handler
 void MBL_Switch_DE_Callback(uint8_t state);	//weak ref, can be defined in other modules. state variants: 0=reset_DERE, 1=set_DERE
 uint8_t MBL_Check_Restrictions_Callback(uint16_t register_address, uint16_t register_data);	//weak ref, can be defined in other modules. return 0 when OK, return 1 when NOK
