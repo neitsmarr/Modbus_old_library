@@ -2,10 +2,8 @@
 #ifndef __EEPROM_H
 #define __EEPROM_H
 
-/* Includes ------------------------------------------------------------------*/
+/*Includes*/
 #include "MODBUS.h"
-
-/* Exported constants --------------------------------------------------------*/
 
 /* Base address of the Flash sectors */
 #ifdef __STM32F031x6_H
@@ -68,15 +66,10 @@
 
 #define	EE_NO_VALID_PAGE		4
 
-/* Exported types ------------------------------------------------------------*/
-/* Exported macro ------------------------------------------------------------*/
-/* Exported functions ------------------------------------------------------- */
 uint16_t EE_Init(void);
 uint16_t EE_ReadVariable(uint16_t VirtAddress);
 uint16_t EE_WriteVariable(uint16_t VirtAddress, uint16_t Data);
 uint16_t EE_FindValidPage(uint8_t Operation);
 
 #endif /* __EEPROM_H */
-
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/
 

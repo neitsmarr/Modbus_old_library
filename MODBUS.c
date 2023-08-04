@@ -1,4 +1,4 @@
-/*Modbus.c*/
+/*MODBUS.c*/
 #include "MODBUS.h"
 #include "EEPROM.h"
 
