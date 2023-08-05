@@ -13,7 +13,7 @@
 #define UPDATE_HW_VERSION			0		//update HW version after default values of HR4-HR6 were changed: 0=OFF, 1=ON
 
 /*FUNCTIONS THAT CAN BE USED IN OTHER MODULES*/
-void MBL_Init_Modbus(UART_HandleTypeDef *huart);	//call this function in main.c after initialisation of all hardware
+void MBL_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_handler);	//call this function in main.c after initialisation of all hardware
 void MBL_Check_For_Request(void);
 void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data);	//call this function to overwrite HR value in uint_hold_reg[] and EEPROM
 void MBL_Inc_Tick(void);	//call this function inside SysTick_Handler
