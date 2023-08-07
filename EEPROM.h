@@ -5,9 +5,9 @@
 /*Includes*/
 #include "MODBUS.h"
 
-uint8_t EE_Init(uint32_t start_address);
-uint8_t EE_ReadVariable(uint16_t VirtAddress, uint16_t *data);
-uint8_t EE_WriteVariable(uint16_t VirtAddress, uint16_t Data);
+uint8_t EEL_Init(uint32_t start_address);
+uint8_t EEL_Read_Variable(uint16_t virtual_address, uint16_t *data);
+uint8_t EEL_Write_Variable(uint16_t virtual_address, uint16_t data);
 
 #endif /* __EEPROM_H */
 

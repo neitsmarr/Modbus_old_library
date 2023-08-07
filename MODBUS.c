@@ -107,7 +107,7 @@ void MBL_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_
 
 	Init_USART_DMA();
 
-	flg_init_eeprom = Read_Dummy(0, &data);
+	flg_init_eeprom = Read_Dummy(0xA001, &data);
 	if(flg_init_eeprom)	//check is this the first mcu startup
 	{
 		Init_Default_Values(all_values);
@@ -850,7 +850,10 @@ static void Init_Default_Values(uint8_t values)
 
 	for(uint32_t i=start_register;i<end_register;i++)//For the first three registers (The communication registers according to the Sentera standard)
 	{
-		Update_Data(i, RegVirtAddr[i].DefaultValue);//write the default values
+		if(RegVirtAddr[i].virtualAddress != 0)
+		{
+			Update_Data(i, RegVirtAddr[i].DefaultValue);//write the default values
+		}
 	}
 
 	if(values) Update_Communication_Parameters();
@@ -928,7 +931,7 @@ static void Check_Modbus_Registers(void)	//UPDATED
 
 	for(uint32_t i=0;i<H_REG_COUNT;i++)	//from the first to the last register
 	{
-		if(RegVirtAddr[i].RW == 0)
+		if(RegVirtAddr[i].RW == 0 && RegVirtAddr[i].virtualAddress != 0)
 		{
 			Read_Dummy(i, &reg_data);
 
