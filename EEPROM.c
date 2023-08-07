@@ -54,7 +54,7 @@ enum
 
 
 uint32_t eeprom_start_address;
-uint8_t free_space;	//TODO stop here 06.08.2023
+uint32_t active_page_free_space;	//TODO stop here 06.08.2023
 
 /* Pages 0 and 1 base and end addresses */
 uint32_t page_0_base_address;
@@ -63,13 +63,10 @@ uint32_t page_1_base_address;
 //struct eeprom_handle eeprom_handle;
 uint32_t active_page_address;
 
-/*Extern variables*/
-extern const struct structHRVA RegVirtAddr[H_REG_COUNT];
-
 static HAL_StatusTypeDef Format(void);
 static uint16_t Verify_Page_Full_Write_Variable(uint16_t VirtAddress, uint16_t Data);
 static uint8_t Page_Transfer(void);
-static uint8_t Verify_Page_Fully_Erased(uint32_t address, uint8_t *flg_erased);
+static uint8_t Calculate_Free_Space(uint32_t page_address, uint32_t *free_space);
 
 
 /**
@@ -82,14 +79,11 @@ static uint8_t Verify_Page_Fully_Erased(uint32_t address, uint8_t *flg_erased);
 uint8_t EEL_Init(uint32_t start_address)
 {
 	uint16_t page_status_0, page_status_1;
-	uint16_t varidx = 0;
-	uint16_t data;
 	uint32_t page_error = 0;
 	FLASH_EraseInitTypeDef erase_init;
-	uint8_t flg_erased;
+	uint32_t free_space;
 	uint32_t valid_page_address, receive_page_address, erased_page_address;
 	HAL_StatusTypeDef status = HAL_ERROR;
-
 
 	eeprom_start_address = start_address;
 	page_0_base_address = eeprom_start_address;
@@ -124,8 +118,9 @@ uint8_t EEL_Init(uint32_t start_address)
 		erased_page_address = page_0_base_address;
 	}
 
-	Verify_Page_Fully_Erased(erased_page_address, &flg_erased);
-	if(!flg_erased)
+	Calculate_Free_Space(erased_page_address, &free_space);	//stop here 07.08.2023 check calculation of free_space
+
+	if(free_space != PAGE_SIZE / 4)
 	{
 		erase_init.PageAddress = erased_page_address;
 		status = HAL_FLASHEx_Erase(&erase_init, &page_error);
@@ -151,23 +146,9 @@ uint8_t EEL_Init(uint32_t start_address)
 		receive_page_address = page_0_base_address;
 	}
 
-	/* Transfer data from Page1 to Page0 */	//TODO add checking for already transfered
-	for (varidx = EEPROM_VIRTUAL_ADDRESS; varidx < EEPROM_VIRTUAL_ADDRESS+EEPROM_EMULATED_SIZE; varidx++)
-	{
-		/* Read the last variables' updates */
-		status = EEL_Read_Variable(varidx, &data);
-		/* In case variable corresponding to the virtual address was found */
-		if (status == HAL_OK)
-		{
-			/* Transfer the variable to the Page0 */
-			status = Verify_Page_Full_Write_Variable(varidx, data);
-			/* If program operation was failed, a Flash error code is returned */
-			if (status != HAL_OK)
-			{
-				return status;
-			}
-		}
-	}
+	active_page_address = valid_page_address;
+	/* Transfer data from Page to Page */	//TODO add checking for already transfered
+	Page_Transfer();
 	/* Mark Page X as valid */
 	status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, receive_page_address, VALID_PAGE);
 	/* If program operation was failed, a Flash error code is returned */
@@ -176,17 +157,14 @@ uint8_t EEL_Init(uint32_t start_address)
 		return status;
 	}
 	/* Erase Page X */
-	Verify_Page_Fully_Erased(page_1_base_address, &flg_erased);
-	if(!flg_erased)
+	erase_init.PageAddress = valid_page_address;
+	status = HAL_FLASHEx_Erase(&erase_init, &page_error);
+	/* If erase operation was failed, a Flash error code is returned */
+	if (status != HAL_OK)
 	{
-		erase_init.PageAddress = valid_page_address;
-		status = HAL_FLASHEx_Erase(&erase_init, &page_error);
-		/* If erase operation was failed, a Flash error code is returned */
-		if (status != HAL_OK)
-		{
-			return status;
-		}
+		return status;
 	}
+
 	active_page_address = receive_page_address;
 	break;
 
@@ -202,9 +180,10 @@ uint8_t EEL_Init(uint32_t start_address)
 		erased_page_address = page_0_base_address;
 	}
 
-	/* Erase Page1 */
-	Verify_Page_Fully_Erased(erased_page_address, &flg_erased);
-	if(!flg_erased)
+	/* Erase Page X */
+	Calculate_Free_Space(erased_page_address, &free_space);
+
+	if(free_space != PAGE_SIZE/4)
 	{
 		erase_init.PageAddress = erased_page_address;
 		status = HAL_FLASHEx_Erase(&erase_init, &page_error);
@@ -237,42 +216,17 @@ uint8_t EEL_Init(uint32_t start_address)
 		break;
 	}
 
-	return HAL_OK;
-}
+	Calculate_Free_Space(active_page_address, &active_page_free_space);
 
-
-/**
- * @brief  Verify if specified page is fully erased.
- * @param  Address: page address
- *   This parameter can be one of the following values:
- *     @arg PAGE0_BASE_ADDRESS: Page0 base address
- *     @arg PAGE1_BASE_ADDRESS: Page1 base address
- * @retval page fully erased status:
- *           - 0: if Page not erased
- *           - 1: if Page erased
- */
-static uint8_t Verify_Page_Fully_Erased(uint32_t address, uint8_t *flg_erased)
-{
-	volatile uint32_t *ptr_addr_compare;
-	uint8_t temp_flg_erased = 1;
-
-	volatile uint32_t *ptr_address = (volatile uint32_t*)address;
-
-	ptr_addr_compare = ptr_address + PAGE_SIZE/4;
-
-	/* Check each active page address starting from end */
-	for(;ptr_address<ptr_addr_compare; ptr_address+=4)
+	if (active_page_free_space == 0)
 	{
-		if(*ptr_address != 0xFFFFFFFFU)
-		{
-			temp_flg_erased = 0;
-			break;
-		}
+		Page_Transfer();
 	}
 
-	*flg_erased = temp_flg_erased;
+
 	return HAL_OK;
 }
+
 
 /**
  * @brief  Returns the last stored variable data, if found, which correspond to
@@ -329,25 +283,26 @@ uint8_t EEL_Read_Variable(uint16_t VirtAddress, uint16_t *data)
  *           - NO_VALID_PAGE: if no valid page was found
  *           - Flash error code: on write Flash error
  */
-uint8_t EEL_Write_Variable(uint16_t VirtAddress, uint16_t data)
+uint8_t EEL_Write_Variable(uint16_t virtual_address, uint16_t data)
 {
 	uint8_t status = 0;
 	uint16_t old_data;
 
-	if(VirtAddress != EEPROM_NO_WRITE_ADDRESS)
+	if(virtual_address != EEPROM_NO_WRITE_ADDRESS)
 	{
-		status = EEL_Read_Variable(VirtAddress, &old_data);
+		status = EEL_Read_Variable(virtual_address, &old_data);
+
 		if(data != old_data || status != 0)		//TODO optimize this workaround
 		{
 			/* In case the EEPROM active page is full */
-			if (free_space == 0)
+			if (active_page_free_space == 0)
 			{
 				/* Perform Page transfer */
 				status = Page_Transfer();
 			}
 
 			/* Write the variable virtual address and value in the EEPROM */
-			status = Verify_Page_Full_Write_Variable(VirtAddress, data);
+			status = Verify_Page_Full_Write_Variable(virtual_address, data);
 		}
 	}
 	/* Return last operation status */
@@ -365,15 +320,18 @@ static HAL_StatusTypeDef Format(void)
 	HAL_StatusTypeDef status = HAL_OK;
 	uint32_t page_error;
 	FLASH_EraseInitTypeDef erase_init;
-	uint8_t flg_erased;
 	uint32_t page_address;
+	uint32_t free_space;
 
 	for(uint8_t i=0; i<2; i++)
 	{
 		page_address = eeprom_start_address + PAGE_SIZE * i;
 		/* Erase Page X */
-		Verify_Page_Fully_Erased(page_address, &flg_erased);
-		if(!flg_erased)
+		Calculate_Free_Space(page_address, &free_space);
+
+//		Verify_Page_Fully_Erased(page_address, &flg_erased);
+
+		if(free_space != PAGE_SIZE/4)
 		{
 			erase_init.TypeErase   = FLASH_TYPEERASE_PAGES;
 			erase_init.PageAddress = page_address;
@@ -390,6 +348,8 @@ static HAL_StatusTypeDef Format(void)
 
 	/* Set Page0 as valid page: Write VALID_PAGE at Page0 base address */
 	status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, eeprom_start_address, VALID_PAGE);
+
+	active_page_free_space = PAGE_SIZE / 4 - 1;
 
 	/* If program operation was failed, a Flash error code is returned */
 	return status;
@@ -423,7 +383,7 @@ static uint16_t Verify_Page_Full_Write_Variable(uint16_t VirtAddress, uint16_t D
 		{
 			status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, address, Data);
 			status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, address + 2, VirtAddress);
-			free_space--;
+			active_page_free_space--;
 			return status;
 		}
 
@@ -446,12 +406,13 @@ static uint16_t Verify_Page_Full_Write_Variable(uint16_t VirtAddress, uint16_t D
  */
 static uint8_t Page_Transfer(void)	//TODO add checking for already transfered variables
 {
-	uint32_t new_page_address, old_page_address, current_address;
+	uint32_t new_page_address, old_page_address, from_address, to_address;
 	uint32_t page_error = 0;
 	FLASH_EraseInitTypeDef erase_init;
 	HAL_StatusTypeDef status;
 	uint8_t buf_data[256] = {0};	//'hash' table
 	uint8_t virtual_address;
+	uint16_t data;
 
 	if (active_page_address == page_0_base_address)
 	{
@@ -464,26 +425,33 @@ static uint8_t Page_Transfer(void)	//TODO add checking for already transfered va
 		old_page_address = page_1_base_address;
 	}
 
-	status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, new_page_address, RECEIVE_DATA);
-	new_page_address +=4;
-	if (status != HAL_OK)
+	if(*(uint16_t*)new_page_address != RECEIVE_DATA)
 	{
-		return status;
+		status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, new_page_address, RECEIVE_DATA);
+
+		if (status != HAL_OK)
+		{
+			return status;
+		}
 	}
 
-	current_address = old_page_address + PAGE_SIZE - 4;
-	while(current_address > old_page_address)
+	to_address = new_page_address + 4;
+
+	from_address = old_page_address + PAGE_SIZE - 4;
+	while(from_address > old_page_address)
 	{
-		virtual_address = *(volatile uint8_t*)current_address;
+		virtual_address = *(volatile uint8_t*)from_address;
 
 		if(buf_data[virtual_address] == 0)
 		{
 			buf_data[virtual_address] = 1;
 
-			*(uint32_t*)new_page_address = *(uint32_t*)old_page_address;
+			data = *(uint16_t*)from_address;
+			HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, to_address, data);
 		}
 
-		current_address -= 4;
+		to_address += 2;
+		from_address -= 2;
 	}
 
 	erase_init.TypeErase   = FLASH_TYPEERASE_PAGES;
@@ -503,5 +471,28 @@ static uint8_t Page_Transfer(void)	//TODO add checking for already transfered va
 	}
 
 	active_page_address = new_page_address;
+	return HAL_OK;
+}
+
+static uint8_t Calculate_Free_Space(uint32_t page_address, uint32_t *free_space)
+{
+	uint32_t address;
+
+	/* Get the valid Page start address */
+	address = page_address;
+
+	/* Check each active page address starting from beginning */
+	while (address < page_address+PAGE_SIZE)
+	{
+		if ((*(volatile uint32_t*)address) != 0xFFFFFFFF)
+		{
+			break;
+		}
+
+		address += 4;
+	}
+
+	*free_space = (address - page_address) / 4;
+
 	return HAL_OK;
 }
