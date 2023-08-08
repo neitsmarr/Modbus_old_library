@@ -36,7 +36,7 @@ extern uint8_t flg_modbus_packet_received;
 
 struct structHRVA
 {
-	uint16_t virtualAddress;
+	uint8_t virtualAddress;
 	uint8_t RW;
 	uint8_t signedUnsigned;
 	uint16_t Minimum;
