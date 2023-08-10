@@ -3,11 +3,14 @@
 #define __EEPROM_H
 
 /*Includes*/
-#include "main.h"
+//#include "main.h"
+#include "stm32f0xx_hal.h"
 
-uint8_t EEL_Init(uint32_t start_address);
-uint8_t EEL_Read_Variable(uint8_t virtual_address, uint16_t *data);
-uint8_t EEL_Write_Variable(uint8_t virtual_address, uint16_t data);
+uint8_t FEE_Init(uint32_t start_address);
+uint8_t FEE_Read_Data(uint8_t identifier, uint16_t *data);
+uint8_t FEE_Write_Data(uint8_t identifier, uint16_t data);
+
+//Record format: [8 bit|8 bit|16 bit] ~ [CRC/Hamming|address|value]
 
 #endif /* __EEPROM_H */
 

@@ -13,13 +13,13 @@
 #define UPDATE_HW_VERSION			0		//update HW version after default values of HR4-HR6 were changed: 0=OFF, 1=ON
 
 /*FUNCTIONS THAT CAN BE USED IN OTHER MODULES*/
-void MBL_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_handler);	//call this function in main.c after initialisation of all hardware
-void MBL_Check_For_Request(void);
-void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data);	//call this function to overwrite HR value in uint_hold_reg[] and EEPROM
-void MBL_Inc_Tick(void);	//call this function inside SysTick_Handler
-void MBL_Switch_DE_Callback(uint8_t state);	//weak ref, can be defined in other modules. state variants: 0=reset_DERE, 1=set_DERE
-uint8_t MBL_Check_Restrictions_Callback(uint16_t register_address, uint16_t register_data);	//weak ref, can be defined in other modules. return 0 when OK, return 1 when NOK
-void MBL_Register_Update_Callback(uint16_t register_address, uint16_t register_data);
+void MBR_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_handler);	//call this function in main.c after initialisation of all hardware
+void MBR_Check_For_Request(void);
+void MBR_Rewrite_Register(uint16_t register_number, uint16_t reg_data);	//call this function to overwrite HR value in uint_hold_reg[] and EEPROM
+void MBR_Inc_Tick(void);	//call this function inside SysTick_Handler
+void MBR_Switch_DE_Callback(uint8_t state);	//weak ref, can be defined in other modules. state variants: 0=reset_DERE, 1=set_DERE
+uint8_t MBR_Check_Restrictions_Callback(uint16_t register_address, uint16_t register_data);	//weak ref, can be defined in other modules. return 0 when OK, return 1 when NOK
+void MBR_Register_Update_Callback(uint16_t register_address, uint16_t register_data);
 
 
 /*BUFFERS AND FLAGS THAT CAN BE USED IN OTHER MODULES [READ-ONLY]*/

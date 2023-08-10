@@ -96,7 +96,7 @@ static uint16_t Calculate_CRC16(uint8_t *buf, uint16_t len);
  * @param huart UART handle.
  * @retval void (HAL status)
  */
-void MBL_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_handler)
+void MBR_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_handler)
 {
 	uint8_t flg_init_eeprom = 0;
 	uint16_t data;
@@ -147,7 +147,7 @@ void MBL_Init_Modbus(UART_HandleTypeDef *huart, void *read_handler, void *write_
  * @param none
  * @retval none
  */
-void MBL_Check_For_Request(void)
+void MBR_Check_For_Request(void)
 {
 	if(flg_modbus_packet_received)
 	{
@@ -175,7 +175,7 @@ void MBL_Check_For_Request(void)
  * @param none
  * @retval none
  */
-void MBL_Inc_Tick(void)
+void MBR_Inc_Tick(void)
 {
 	static uint16_t cnt_second;
 
@@ -200,7 +200,7 @@ void MBL_Inc_Tick(void)
  * @param none
  * @retval none
  */
-void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
+void MBR_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
 {
 	Update_Data(register_number, reg_data);
 }
@@ -212,7 +212,7 @@ void MBL_Rewrite_Register(uint16_t register_number, uint16_t reg_data)
  * @param none
  * @retval none
  */
-__weak void MBL_Switch_DE_Callback(uint8_t state)
+__weak void MBR_Switch_DE_Callback(uint8_t state)
 {
 	UNUSED(state);	//can be ommited in C2X
 }
@@ -222,7 +222,7 @@ __weak void MBL_Switch_DE_Callback(uint8_t state)
  * @param none
  * @retval 0 = ok (new value is allowed), 1 = not ok (new value is not allowed)
  */
-__weak uint8_t MBL_Check_Restrictions_Callback(uint16_t register_address, uint16_t register_data)
+__weak uint8_t MBR_Check_Restrictions_Callback(uint16_t register_address, uint16_t register_data)
 {
 	UNUSED(register_address);
 	UNUSED(register_data);
@@ -234,7 +234,7 @@ __weak uint8_t MBL_Check_Restrictions_Callback(uint16_t register_address, uint16
  * @param none
  * @retval none
  */
-__weak void MBL_Register_Update_Callback(uint16_t register_address, uint16_t register_data)
+__weak void MBR_Register_Update_Callback(uint16_t register_address, uint16_t register_data)
 {
 	UNUSED(register_address);
 	UNUSED(register_data);
@@ -437,7 +437,7 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 					{
 						if(((int16_t)RegVirtAddr[i].Minimum <= (int16_t)reg_data)&&((int16_t)reg_data <= (int16_t)RegVirtAddr[i].Maximum))
 						{
-							if(MBL_Check_Restrictions_Callback(i, reg_data))
+							if(MBR_Check_Restrictions_Callback(i, reg_data))
 							{
 								response_s->exception = 0x03;
 								break;
@@ -457,7 +457,7 @@ static void Write_Multiple_Registers(struct response_s *response_s)
 					{
 						if((RegVirtAddr[i].Minimum <= reg_data)&&(reg_data <= RegVirtAddr[i].Maximum))
 						{
-							if(MBL_Check_Restrictions_Callback(i, reg_data))
+							if(MBR_Check_Restrictions_Callback(i, reg_data))
 							{
 								response_s->exception = 0x03;
 								break;
@@ -538,7 +538,7 @@ static void Write_Single_Register(struct response_s *response_s)
 			{
 				if(((int16_t)RegVirtAddr[start_address].Minimum <= (int16_t)reg_data)&&((int16_t)reg_data <= (int16_t)RegVirtAddr[start_address].Maximum))//is the data in the limits
 				{
-					if(MBL_Check_Restrictions_Callback(start_address, reg_data))
+					if(MBR_Check_Restrictions_Callback(start_address, reg_data))
 					{
 						response_s->exception = 0x03;
 					}
@@ -556,7 +556,7 @@ static void Write_Single_Register(struct response_s *response_s)
 			{
 				if((RegVirtAddr[start_address].Minimum <= reg_data)&&(reg_data <= RegVirtAddr[start_address].Maximum))//is the data in the limits
 				{
-					if(MBL_Check_Restrictions_Callback(start_address, reg_data))
+					if(MBR_Check_Restrictions_Callback(start_address, reg_data))
 					{
 						response_s->exception = 0x03;
 					}
@@ -1040,20 +1040,20 @@ static void Update_Data(uint16_t register_number, uint16_t reg_data)
 {
 	Write_Dummy(RegVirtAddr[register_number].virtualAddress, reg_data);
 	uint_hold_reg[register_number] = reg_data;
-	MBL_Register_Update_Callback(register_number, reg_data);
+	MBR_Register_Update_Callback(register_number, reg_data);
 }
 
 
 static void Set_DE_Pin(void)
 {
 	USART1_DE_GPIO_Port->BSRR = USART1_DE_Pin;
-	MBL_Switch_DE_Callback(1);
+	MBR_Switch_DE_Callback(1);
 }
 
 static void Reset_DE_Pin(void)
 {
 	USART1_DE_GPIO_Port->BRR = USART1_DE_Pin;
-	MBL_Switch_DE_Callback(0);
+	MBR_Switch_DE_Callback(0);
 }
 
 static void Set_NBT_Pin(void)
