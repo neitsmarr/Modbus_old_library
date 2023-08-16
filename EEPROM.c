@@ -3,9 +3,6 @@
 /*Includes*/
 #include "EEPROM.h"
 
-/* Define the size of the sectors to be used */
-#define PAGE_SIZE	((uint32_t)FLASH_PAGE_SIZE)  /* Page size */
-
 /* Page status definitions */
 enum page_status_t
 {
@@ -15,6 +12,8 @@ enum page_status_t
 	page_status_invalid		= 1<<3
 };
 
+enum {crc_poly = 0xE0};	//reversed CRC-8-CCITT, Hamming distance = 4 (up to 119 bits)
+
 //struct eeprom_handle
 //{
 //	void *active_page;
@@ -23,23 +22,39 @@ enum page_status_t
 //	uint32_t page_1_address;
 //};
 
+union record_t
+{
+	uint32_t word;
+
+	struct
+	{
+		uint8_t crc;
+		uint8_t identifier;
+		uint16_t value;
+	} data;
+};
+
 uint32_t eeprom_start_address;
+uint32_t eeprom_page_size;
 uint32_t page_0_start_address;
 uint32_t page_1_start_address;
 uint32_t active_page_address;
 uint32_t active_page_free_space;	//in records (32 bit)
 
-
 //struct eeprom_handle eeprom_handle;
 
+uint8_t crc_table[256] = {0};
 
 static HAL_StatusTypeDef Format(void);
 static HAL_StatusTypeDef Add_Record(uint8_t identifier, uint16_t data);
+static HAL_StatusTypeDef Get_Record(uint8_t identifier, uint16_t *data);
 static HAL_StatusTypeDef Page_Transfer(void);
 static HAL_StatusTypeDef Calculate_Free_Space(uint32_t page_address, uint32_t *free_space);
 static HAL_StatusTypeDef Set_Page_Status(uint32_t page_address, uint8_t status);
 static HAL_StatusTypeDef Get_Page_Status(uint32_t page_address, uint8_t *status);
-static HAL_StatusTypeDef Calculate_CRC(uint8_t *data, uint8_t length);
+static HAL_StatusTypeDef Check_Record_Integrity(union record_t record);
+static void Compute_CRC_Table(uint8_t table[256], uint8_t polynomial);
+static uint8_t Calculate_CRC(uint8_t *data, uint8_t length);
 
 /**
  * @brief  Restore the pages to a known good state in case of page's status
@@ -48,7 +63,7 @@ static HAL_StatusTypeDef Calculate_CRC(uint8_t *data, uint8_t length);
  * @retval - Flash error code: on write Flash error
  *         - FLASH_COMPLETE: on success
  */
-uint8_t FEE_Init(uint32_t start_address)
+uint8_t FEE_Init(uint32_t start_address, uint32_t page_size)
 {
 	uint8_t page_status_0, page_status_1;
 	uint32_t page_error = 0;
@@ -57,9 +72,12 @@ uint8_t FEE_Init(uint32_t start_address)
 	uint32_t valid_page_address, receive_page_address, erased_page_address;
 	HAL_StatusTypeDef status = HAL_ERROR;
 
+	Compute_CRC_Table(crc_table, crc_poly);
+
 	eeprom_start_address = start_address;
+	eeprom_page_size = page_size;
 	page_0_start_address = eeprom_start_address;
-	page_1_start_address = eeprom_start_address + PAGE_SIZE;
+	page_1_start_address = eeprom_start_address + eeprom_page_size;
 
 	while(status != HAL_OK)
 	{
@@ -73,7 +91,7 @@ uint8_t FEE_Init(uint32_t start_address)
 	erase_init.TypeErase   = FLASH_TYPEERASE_PAGES;
 	erase_init.NbPages     = 1;
 
-	switch(page_status_0 & page_status_1)
+	switch(page_status_0 | page_status_1)
 	{
 	case page_status_active | page_status_erased:
 	if(page_status_0 == page_status_active)
@@ -89,7 +107,7 @@ uint8_t FEE_Init(uint32_t start_address)
 
 	Calculate_Free_Space(erased_page_address, &free_space);	//stop here 07.08.2023 check calculation of free_space
 
-	if(free_space != PAGE_SIZE / 4)
+	if(free_space != eeprom_page_size / 4)
 	{
 		erase_init.PageAddress = erased_page_address;
 		status = HAL_FLASHEx_Erase(&erase_init, &page_error);
@@ -134,7 +152,7 @@ uint8_t FEE_Init(uint32_t start_address)
 
 	Calculate_Free_Space(erased_page_address, &free_space);
 
-	if(free_space != PAGE_SIZE/4)
+	if(free_space != eeprom_page_size/4)
 	{
 		erase_init.PageAddress = erased_page_address;
 		status = HAL_FLASHEx_Erase(&erase_init, &page_error);
@@ -144,7 +162,7 @@ uint8_t FEE_Init(uint32_t start_address)
 		}
 	}
 
-	Set_Page_Status(receive_page_address, page_status_active);
+	status = Set_Page_Status(receive_page_address, page_status_active);
 	if (status != HAL_OK)
 	{
 		return status;
@@ -185,35 +203,13 @@ uint8_t FEE_Init(uint32_t start_address)
  *           - 1: if the variable was not found
  *           - NO_VALID_PAGE: if no valid page was found.
  */
-uint8_t FEE_Read_Data(uint8_t identifier, uint16_t *data)
+uint8_t FEE_Read_Data(uint8_t identifier, uint16_t *ptr_data)
 {
-	uint8_t addressvalue;
-	uint16_t value;
-	uint32_t address, PageStartAddress;
-	uint16_t result = 1;
-	uint32_t word;
+	uint16_t status;
 
-	PageStartAddress = active_page_address;
-	address = active_page_address + PAGE_SIZE - 4;
+	status = Get_Record(identifier, ptr_data);
 
-	while(address > PageStartAddress)
-	{
-		word = *(volatile uint32_t*)address;
-
-		addressvalue = (word>>8) & 0xFF;
-
-		if(addressvalue == identifier)
-		{
-			value = word>>16;
-			*data = value;
-			result = HAL_OK;
-			break;
-		}
-
-		address -= 4;
-	}
-
-	return result;
+	return status;
 }
 
 /**
@@ -267,11 +263,11 @@ static HAL_StatusTypeDef Format(void)
 
 	for(uint8_t i=0; i<2; i++)
 	{
-		page_address = eeprom_start_address + PAGE_SIZE * i;
+		page_address = eeprom_start_address + eeprom_page_size * i;
 
 		Calculate_Free_Space(page_address, &free_space);
 
-		if(free_space != PAGE_SIZE/4)
+		if(free_space != eeprom_page_size/4)
 		{
 			erase_init.TypeErase   = FLASH_TYPEERASE_PAGES;
 			erase_init.PageAddress = page_address;
@@ -287,7 +283,7 @@ static HAL_StatusTypeDef Format(void)
 
 	status = Set_Page_Status(eeprom_start_address, page_status_active);
 
-	active_page_free_space = PAGE_SIZE / 4 - 1;
+	active_page_free_space = eeprom_page_size / 4 - 1;
 
 	return status;
 }
@@ -305,34 +301,62 @@ static HAL_StatusTypeDef Format(void)
 static HAL_StatusTypeDef Add_Record(uint8_t identifier, uint16_t data)
 {
 	HAL_StatusTypeDef status;
-	uint32_t address, page_end_address;
-	uint16_t shifted_identifier;
+	uint32_t address, record=0;
+	uint8_t crc;
+	uint8_t *payload;
 
-	shifted_identifier = (uint16_t)identifier<<8;
+	record = ((uint32_t) identifier << 8) | ((uint32_t) data << 16);
 
-	address = active_page_address;
+	payload = (uint8_t*)&record + 1;
 
-	page_end_address = active_page_address + PAGE_SIZE;
+	crc = Calculate_CRC(payload, 3);
 
-	while (address < page_end_address)
-	{
-		if ((*(volatile uint32_t*)address) == 0xFFFFFFFF)
-		{
-			status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, address, shifted_identifier);
-			status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, address + 2, data);
-			active_page_free_space--;
-			return status;
-		}
+	record |= crc;
 
-		address += 4;
-	}
+	address = active_page_address + eeprom_page_size - 4*active_page_free_space;
 
-	return HAL_OK;
+	status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, address, record);
+	status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_HALFWORD, address + 2, record>>16);
+	active_page_free_space--;
+
+	return status;
 }
 
 static HAL_StatusTypeDef Get_Record(uint8_t identifier, uint16_t *data)
 {
-	return HAL_OK;
+	uint8_t stored_identifier;
+	uint16_t value;
+	uint32_t address, PageStartAddress;
+	uint16_t status;
+	uint8_t record_exist = 1;
+	uint32_t word;
+
+	PageStartAddress = active_page_address;
+	address = active_page_address + eeprom_page_size - 4;
+
+	while(address > PageStartAddress)
+	{
+		word = *(volatile uint32_t*)address;
+
+		stored_identifier = (word>>8) & 0xFF;
+
+		if(stored_identifier == identifier)
+		{
+			status = Check_Record_Integrity((union record_t)word);
+
+			if(status == HAL_OK)
+			{
+				value = word>>16;
+				*data = value;
+				record_exist = 0;
+				break;
+			}
+		}
+
+		address -= 4;
+	}
+
+	return record_exist;
 }
 
 /**
@@ -381,7 +405,7 @@ static HAL_StatusTypeDef Page_Transfer(void)	//TODO add checking for already tra
 
 	to_address = new_page_address + 4;
 
-	from_address = old_page_address + PAGE_SIZE - 4;
+	from_address = old_page_address + eeprom_page_size - 4;
 	while(from_address > old_page_address)
 	{
 		identifier = *((volatile uint8_t*)from_address+1);
@@ -429,7 +453,7 @@ static HAL_StatusTypeDef Calculate_Free_Space(uint32_t page_address, uint32_t *f
 
 	address = page_address;
 
-	while (address < page_address+PAGE_SIZE)
+	while (address < page_address+eeprom_page_size)
 	{
 		if ((*(volatile uint32_t*)address) == 0xFFFFFFFF)
 		{
@@ -439,7 +463,7 @@ static HAL_StatusTypeDef Calculate_Free_Space(uint32_t page_address, uint32_t *f
 		address += 4;
 	}
 
-	*free_space = (PAGE_SIZE - (address - page_address)) / 4;
+	*free_space = (eeprom_page_size - (address - page_address)) / 4;
 
 	return HAL_OK;
 }
@@ -462,27 +486,81 @@ static HAL_StatusTypeDef Set_Page_Status(uint32_t page_address, uint8_t status)
 static HAL_StatusTypeDef Get_Page_Status(uint32_t page_address, uint8_t *status)
 {
 	uint32_t word;
+	uint16_t active_status, receive_status;
 
 	word = *(volatile uint32_t*)page_address;
+	receive_status = word & 0xFF;
+	active_status = word>>16;
 
-	switch(word)
+	if(active_status == 0x0000)	//TODO replace it with Count Once
 	{
-	case 0xFFFFFFFF:
-		*status = page_status_erased;
-		break;
-	case 0xFFFF0000:
-		*status = page_status_receive;
-		break;
-	case 0x00000000:
 		*status = page_status_active;
-		break;
+	}
+	else if(receive_status == 0x0000)
+	{
+		*status = page_status_receive;
+	}
+	else
+	{
+		*status = page_status_erased;
 	}
 
 	return HAL_OK;
 }
 
-static HAL_StatusTypeDef Calculate_CRC(uint8_t *data, uint8_t length)
+static HAL_StatusTypeDef Check_Record_Integrity(union record_t record)	//TODO stopped here
 {
-	return HAL_OK;
+	uint8_t *payload;
+	uint8_t crc;
+
+	payload = &record.data.identifier;
+
+	crc = Calculate_CRC(payload, 3);
+
+	if(record.data.crc == crc)
+	{
+		return HAL_OK;
+	}
+	else
+	{
+		return HAL_ERROR;
+	}
 }
 
+static uint8_t Calculate_CRC(uint8_t *data, uint8_t length)
+{
+	uint8_t index;
+	uint16_t remainder = 0xFFFF;
+
+	while(length--)
+	{
+		index = *data++ ^ remainder;
+		remainder >>= 8;
+		remainder ^= crc_table[index];
+	}
+
+	return remainder;
+}
+
+static void Compute_CRC_Table(uint8_t table[256], uint8_t polynomial)
+{
+	uint8_t remainder = 0x01;
+	size_t i, j;
+
+	for (i = 128; i > 0; i >>= 1)
+	{
+		if(remainder & 0x01)
+		{
+			remainder = (remainder >> 1) ^ polynomial;
+		}
+		else
+		{
+			remainder >>= 1;
+		}
+
+		for (j = 0; j < 256; j += 2*i)
+		{
+			table[i + j] = remainder ^ table[j];
+		}
+	}
+}
